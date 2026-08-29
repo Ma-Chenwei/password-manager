@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/hmac"
@@ -27,8 +26,7 @@ import (
 )
 
 const (
-	dataFile = "passwords.json"
-
+	dataFile         = "passwords.json"
 	pbkdf2Iterations = 210000
 	saltSize         = 32
 	nonceSize        = 12
@@ -53,18 +51,27 @@ type VaultFile struct {
 	Data       string `json:"data"`
 }
 
-type Session struct {
-	Unlocked bool
+type PageData struct {
+	Page        string
+	Title       string
+	Count       int
+	Items       []PasswordItem
+	Item        PasswordItem
+	Locked      bool
+	LoginTitle  string
+	LoginButton string
+	Message     string
+	Error       string
 }
 
 var (
 	items []PasswordItem
 
-	mu sync.RWMutex
+	itemsMu sync.RWMutex
 
-	sessionMu sync.RWMutex
+	masterPassword string
 
-	session Session
+	passwordMu sync.RWMutex
 
 	tmpl *template.Template
 )
@@ -88,15 +95,15 @@ user-scalable=no">
 <style>
 
 * {
-	box-sizing: border-box;
-	-webkit-tap-highlight-color: transparent;
+	box-sizing:border-box;
+	-webkit-tap-highlight-color:transparent;
 }
 
 html,
 body {
-	margin: 0;
-	padding: 0;
-	min-height: 100%;
+	margin:0;
+	padding:0;
+	min-height:100%;
 	font-family:
 		Helvetica,
 		Arial,
@@ -104,91 +111,89 @@ body {
 	background:
 		linear-gradient(
 			to bottom,
-			#777 0%,
-			#222 100%
+			#777,
+			#222
 		);
-	color: #111;
+	color:#111;
 }
 
 body {
-	min-height: 100vh;
+	min-height:100vh;
 }
 
 .phone {
-	width: 100%;
-	min-height: 100vh;
+	width:100%;
+	min-height:100vh;
+	margin:0 auto;
+
 	background:
 		linear-gradient(
 			to bottom,
-			#eeeeee 0%,
-			#d0d0d0 100%
+			#eeeeee,
+			#d0d0d0
 		);
-	margin: 0 auto;
 }
 
 .navbar {
-	position: relative;
-	height: 44px;
+	position:relative;
+	height:44px;
 
 	background:
 		linear-gradient(
 			to bottom,
-			#78b4ec 0%,
-			#4389ca 48%,
-			#2265a7 52%,
+			#79b5ed 0%,
+			#478dcb 48%,
+			#2367a8 52%,
 			#174f8c 100%
 		);
 
 	border-top:
-		1px solid #8dc6f4;
+		1px solid #8ec8f5;
 
 	border-bottom:
-		1px solid #0e3761;
+		1px solid #103c69;
 
-	color: white;
+	color:white;
 
-	text-align: center;
+	text-align:center;
 
-	font-size: 20px;
+	font-size:20px;
 
-	font-weight: bold;
+	font-weight:bold;
 
-	line-height: 44px;
+	line-height:44px;
 
 	text-shadow:
 		0 -1px 1px rgba(0,0,0,.8);
 
 	box-shadow:
-		0 1px 4px rgba(0,0,0,.45);
-
-	z-index: 10;
+		0 1px 4px
+		rgba(0,0,0,.5);
 }
 
 .nav-title {
-	position: absolute;
+	position:absolute;
 
-	left: 72px;
-	right: 72px;
+	left:70px;
+	right:70px;
 
-	top: 0;
+	top:0;
 
-	white-space: nowrap;
-
-	overflow: hidden;
-
-	text-overflow: ellipsis;
+	white-space:nowrap;
+	overflow:hidden;
+	text-overflow:ellipsis;
 }
 
 .nav-button {
-	position: absolute;
+	position:absolute;
 
-	top: 5px;
+	top:5px;
 
-	height: 34px;
+	height:34px;
 
-	padding: 0 11px;
+	padding:0 11px;
 
-	border-radius: 7px;
+	border-radius:7px;
 
 	border:
 		1px solid
@@ -197,30 +202,31 @@ body {
 	background:
 		linear-gradient(
 			to bottom,
-			#8ac0ef 0%,
-			#528fc9 45%,
-			#2a6cad 55%,
-			#19548f 100%
+			#88c0ef,
+			#4e90cd 45%,
+			#2a6eaf 55%,
+			#19548f
 		);
 
-	color: white;
+	color:white;
 
-	font-size: 14px;
+	font-size:14px;
 
-	font-weight: bold;
+	font-weight:bold;
 
-	line-height: 30px;
+	line-height:30px;
 
 	text-shadow:
-		0 -1px 1px rgba(0,0,0,.7);
+		0 -1px 1px
+		rgba(0,0,0,.7);
 
 	box-shadow:
 		inset 0 1px
-		rgba(255,255,255,.55),
+		rgba(255,255,255,.6),
 		0 1px 1px
 		rgba(0,0,0,.4);
 
-	cursor: pointer;
+	cursor:pointer;
 }
 
 .nav-button:active {
@@ -233,15 +239,15 @@ body {
 }
 
 .nav-left {
-	left: 7px;
+	left:7px;
 }
 
 .nav-right {
-	right: 7px;
+	right:7px;
 }
 
 .search-area {
-	padding: 8px;
+	padding:8px;
 
 	background:
 		linear-gradient(
@@ -255,11 +261,10 @@ body {
 }
 
 .search {
-	width: 100%;
+	width:100%;
+	height:32px;
 
-	height: 32px;
-
-	border-radius: 16px;
+	border-radius:16px;
 
 	border:
 		1px solid #888;
@@ -267,8 +272,8 @@ body {
 	background:
 		linear-gradient(
 			to bottom,
-			#ffffff,
-			#e9e9e9
+			#fff,
+			#e8e8e8
 		);
 
 	box-shadow:
@@ -276,29 +281,28 @@ body {
 		rgba(0,0,0,.25),
 		0 1px white;
 
-	padding:
-		0 12px;
+	padding:0 13px;
 
-	font-size: 16px;
+	font-size:16px;
 
-	outline: none;
+	outline:none;
 }
 
 .count {
-	height: 28px;
+	height:28px;
 
-	text-align: center;
+	line-height:28px;
 
-	line-height: 28px;
+	text-align:center;
 
-	font-size: 12px;
+	font-size:12px;
 
-	color: #666;
+	color:#666;
 
 	background:
 		linear-gradient(
 			to bottom,
-			#e7e7e7,
+			#e8e8e8,
 			#d1d1d1
 		);
 
@@ -307,22 +311,21 @@ body {
 }
 
 .list {
-	margin: 0;
+	margin:0;
+	padding:0;
 
-	padding: 0;
+	list-style:none;
 
-	list-style: none;
-
-	background: white;
+	background:white;
 }
 
 .list-item {
-	position: relative;
+	position:relative;
 
-	min-height: 58px;
+	min-height:58px;
 
 	padding:
-		8px 42px
+		8px 45px
 		8px 15px;
 
 	border-bottom:
@@ -331,101 +334,101 @@ body {
 	background:
 		linear-gradient(
 			to bottom,
-			#ffffff,
+			#fff,
 			#f1f1f1
 		);
 
-	cursor: pointer;
+	cursor:pointer;
 }
 
 .list-item:active {
-	color: white;
+	color:white;
 
 	background:
 		linear-gradient(
 			to bottom,
-			#397fc1,
+			#3b82c2,
 			#175c9e
 		);
 }
 
 .item-title {
-	font-size: 18px;
+	font-size:18px;
 
-	font-weight: bold;
+	font-weight:bold;
 
-	line-height: 22px;
+	line-height:22px;
 
-	white-space: nowrap;
+	white-space:nowrap;
 
-	overflow: hidden;
+	overflow:hidden;
 
-	text-overflow: ellipsis;
+	text-overflow:ellipsis;
 }
 
 .item-user {
-	font-size: 13px;
+	font-size:13px;
 
-	color: #666;
+	color:#666;
 
-	line-height: 18px;
+	line-height:18px;
 
-	white-space: nowrap;
+	white-space:nowrap;
 
-	overflow: hidden;
+	overflow:hidden;
 
-	text-overflow: ellipsis;
+	text-overflow:ellipsis;
 }
 
 .list-item:active
 .item-user {
-	color: white;
+	color:white;
 }
 
 .arrow {
-	position: absolute;
+	position:absolute;
 
-	right: 13px;
+	right:13px;
 
-	top: 50%;
+	top:50%;
 
-	margin-top: -15px;
+	margin-top:-15px;
 
-	font-size: 29px;
+	font-size:29px;
 
-	color: #aaa;
+	color:#aaa;
 }
 
 .list-item:active
 .arrow {
-	color: white;
+	color:white;
 }
 
 .empty {
-	padding: 60px 20px;
+	padding:60px 20px;
 
-	text-align: center;
+	text-align:center;
 
-	color: #777;
+	color:#777;
 
-	font-size: 16px;
+	font-size:16px;
 }
 
 .content {
-	padding: 12px;
+	padding:12px;
 }
 
 .group {
-	margin-bottom: 15px;
+	margin-bottom:15px;
 
 	border:
 		1px solid #999;
 
-	border-radius: 10px;
+	border-radius:10px;
 
-	overflow: hidden;
+	overflow:hidden;
 
-	background: white;
+	background:white;
 
 	box-shadow:
 		0 1px 2px
@@ -433,13 +436,13 @@ body {
 }
 
 .group-title {
-	padding: 7px 12px;
+	padding:7px 12px;
 
-	font-size: 13px;
+	font-size:13px;
 
-	font-weight: bold;
+	font-weight:bold;
 
-	color: #555;
+	color:#555;
 
 	text-shadow:
 		0 1px white;
@@ -447,7 +450,7 @@ body {
 	background:
 		linear-gradient(
 			to bottom,
-			#eeeeee,
+			#eee,
 			#d1d1d1
 		);
 
@@ -456,16 +459,16 @@ body {
 }
 
 .row {
-	min-height: 44px;
+	min-height:44px;
 
-	display: flex;
+	display:flex;
 
-	align-items: center;
+	align-items:center;
 
 	background:
 		linear-gradient(
 			to bottom,
-			#ffffff,
+			#fff,
 			#f3f3f3
 		);
 
@@ -474,51 +477,51 @@ body {
 }
 
 .row:last-child {
-	border-bottom: none;
+	border-bottom:none;
 }
 
 .label {
-	width: 95px;
+	width:95px;
 
-	flex-shrink: 0;
+	flex-shrink:0;
 
-	padding: 10px;
+	padding:10px;
 
-	font-size: 14px;
+	font-size:14px;
 
-	font-weight: bold;
+	font-weight:bold;
 
-	color: #333;
+	color:#333;
 }
 
 .value {
-	flex: 1;
+	flex:1;
 
-	padding: 10px;
+	padding:10px;
 
-	font-size: 14px;
+	font-size:14px;
 
-	word-break: break-word;
+	word-break:break-word;
 }
 
 .value a {
-	color: #0645ad;
+	color:#0645ad;
 }
 
 .mono {
-	font-family: monospace;
+	font-family:monospace;
 }
 
 .big-button {
-	display: block;
+	display:block;
 
-	width: 100%;
+	width:100%;
 
-	min-height: 44px;
+	min-height:44px;
 
-	margin-top: 12px;
+	margin-top:12px;
 
-	border-radius: 10px;
+	border-radius:10px;
 
 	border:
 		1px solid #777;
@@ -526,7 +529,7 @@ body {
 	background:
 		linear-gradient(
 			to bottom,
-			#ffffff,
+			#fff,
 			#d5d5d5
 		);
 
@@ -535,19 +538,19 @@ body {
 		0 1px 2px
 		rgba(0,0,0,.3);
 
-	color: #222;
+	color:#222;
 
-	font-size: 17px;
+	font-size:17px;
 
-	font-weight: bold;
+	font-weight:bold;
 
-	line-height: 42px;
+	line-height:42px;
 
-	text-align: center;
+	text-align:center;
 
-	text-decoration: none;
+	text-decoration:none;
 
-	cursor: pointer;
+	cursor:pointer;
 }
 
 .big-button:active {
@@ -555,14 +558,14 @@ body {
 		linear-gradient(
 			to bottom,
 			#bdbdbd,
-			#eeeeee
+			#eee
 		);
 }
 
 .blue-button {
-	color: white;
+	color:white;
 
-	border-color: #174b7d;
+	border-color:#174b7d;
 
 	background:
 		linear-gradient(
@@ -577,9 +580,9 @@ body {
 }
 
 .red-button {
-	color: white;
+	color:white;
 
-	border-color: #8b1515;
+	border-color:#8b1515;
 
 	background:
 		linear-gradient(
@@ -593,29 +596,45 @@ body {
 		rgba(0,0,0,.5);
 }
 
-.form-input {
-	width: 100%;
+.form-content {
+	padding:12px;
+}
 
-	height: 40px;
+.form-label {
+	display:block;
+
+	margin:
+		9px 0 5px;
+
+	font-size:13px;
+
+	font-weight:bold;
+
+	color:#555;
+}
+
+.form-input {
+	width:100%;
+
+	height:40px;
 
 	border:
 		1px solid #888;
 
-	border-radius: 7px;
+	border-radius:7px;
 
 	background:
 		linear-gradient(
 			to bottom,
-			#ffffff,
-			#eeeeee
+			#fff,
+			#eee
 		);
 
-	padding:
-		0 10px;
+	padding:0 10px;
 
-	font-size: 16px;
+	font-size:16px;
 
-	outline: none;
+	outline:none;
 
 	box-shadow:
 		inset 0 1px 2px
@@ -623,136 +642,123 @@ body {
 }
 
 .form-textarea {
-	width: 100%;
+	width:100%;
 
-	min-height: 100px;
+	min-height:90px;
 
 	border:
 		1px solid #888;
 
-	border-radius: 7px;
+	border-radius:7px;
 
-	background: white;
+	background:white;
 
-	padding: 9px;
+	padding:9px;
 
-	font-size: 15px;
+	font-size:15px;
 
-	resize: vertical;
+	resize:vertical;
 
-	outline: none;
-}
-
-.form-label {
-	display: block;
-
-	margin:
-		12px 0 5px;
-
-	font-size: 13px;
-
-	font-weight: bold;
-
-	color: #555;
+	outline:none;
 }
 
 .otp-box {
-	padding: 16px;
+	padding:16px;
 
-	text-align: center;
+	text-align:center;
 }
 
 .otp-code {
-	font-family: monospace;
+	font-family:monospace;
 
-	font-size: 34px;
+	font-size:34px;
 
-	font-weight: bold;
+	font-weight:bold;
 
-	letter-spacing: 5px;
+	letter-spacing:5px;
 }
 
 .otp-time {
-	margin-top: 7px;
+	margin-top:7px;
 
-	font-size: 13px;
+	font-size:13px;
 
-	color: #777;
+	color:#777;
 }
 
-.import-info {
-	padding: 12px;
+.info {
+	padding:12px;
 
-	font-size: 13px;
+	font-size:13px;
 
-	line-height: 20px;
+	line-height:20px;
 
-	color: #555;
+	color:#555;
 }
 
 .footer {
-	padding: 18px;
+	padding:18px;
 
-	text-align: center;
+	text-align:center;
 
-	color: #777;
+	color:#777;
 
-	font-size: 12px;
+	font-size:12px;
 
 	text-shadow:
 		0 1px white;
 }
 
 .login {
-	padding: 20px;
+	padding:20px;
 }
 
 .login-logo {
 	margin:
-		20px 0;
+		25px 0;
 
-	text-align: center;
+	text-align:center;
 
-	font-size: 34px;
+	font-size:32px;
 
-	font-weight: bold;
+	font-weight:bold;
 
-	color: #555;
+	color:#555;
 
 	text-shadow:
 		0 1px white;
 }
 
 .message {
-	margin-top: 10px;
+	margin-top:10px;
 
-	padding: 10px;
+	padding:10px;
 
-	border-radius: 7px;
+	border-radius:7px;
 
-	background: #eee;
+	background:#eee;
 
-	border: 1px solid #aaa;
+	border:1px solid #aaa;
 
-	font-size: 13px;
+	font-size:13px;
 
-	color: #555;
+	color:#555;
 }
 
-@media (min-width: 500px) {
+@media (min-width:500px) {
 
 	body {
-		padding: 30px 0;
+		padding:30px 0;
 	}
 
 	.phone {
-		width: 375px;
+		width:375px;
 
-		min-height: 667px;
+		min-height:667px;
 
-		border-radius: 24px;
+		border-radius:24px;
 
-		overflow: hidden;
+		overflow:hidden;
 
 		box-shadow:
 			0 15px 50px
@@ -772,9 +778,11 @@ body {
 {{if .Locked}}
 
 <div class="navbar">
+
 	<div class="nav-title">
 		密码
 	</div>
+
 </div>
 
 <div class="login">
@@ -791,7 +799,7 @@ body {
 			{{.LoginTitle}}
 		</div>
 
-		<div class="content">
+		<div class="form-content">
 
 			<form
 			method="POST"
@@ -812,15 +820,19 @@ body {
 				<button
 				class="big-button blue-button"
 				type="submit">
+
 					{{.LoginButton}}
+
 				</button>
 
 			</form>
 
 			{{if .Message}}
+
 			<div class="message">
 				{{.Message}}
 			</div>
+
 			{{end}}
 
 		</div>
@@ -833,35 +845,45 @@ body {
 
 <div class="navbar">
 
-	{{if ne .Page "home"}}
+	{{if eq .Page "home"}}
+
+	<div class="nav-title">
+		密码
+	</div>
+
+	<button
+	class="nav-button nav-right"
+	onclick="location.href='/new'">
+
+		＋
+
+	</button>
+
+	{{else}}
 
 	<button
 	class="nav-button nav-left"
 	onclick="location.href='/'">
-		密码
-	</button>
 
-	{{end}}
+		密码
+
+	</button>
 
 	<div class="nav-title">
 		{{.Title}}
 	</div>
 
-	{{if eq .Page "home"}}
-
-	<button
-	class="nav-button nav-right"
-	onclick="location.href='/import'">
-		导入
-	</button>
-
-	{{else if eq .Page "view"}}
+	{{if eq .Page "view"}}
 
 	<button
 	class="nav-button nav-right"
 	onclick="location.href='/edit?id={{.Item.ID}}'">
+
 		编辑
+
 	</button>
+
+	{{end}}
 
 	{{end}}
 
@@ -882,7 +904,9 @@ body {
 </div>
 
 <div class="count">
+
 	{{.Count}} 个密码
+
 </div>
 
 <ul
@@ -897,15 +921,23 @@ data-search="{{lower .Title}} {{lower .Username}} {{lower .URL}} {{lower .Notes}
 onclick="location.href='/view?id={{.ID}}'">
 
 	<div class="item-title">
+
 		{{if .Title}}
+
 			{{.Title}}
+
 		{{else}}
+
 			未命名
+
 		{{end}}
+
 	</div>
 
 	<div class="item-user">
+
 		{{.Username}}
+
 	</div>
 
 	<div class="arrow">
@@ -917,19 +949,43 @@ onclick="location.href='/view?id={{.ID}}'">
 {{else}}
 
 <div class="empty">
+
 	没有密码
+
 	<br><br>
-	点击右上角“导入”添加 CSV
+
+	点击右上角「＋」新建密码
+
+	<br>
+
+	或进入菜单导入 CSV
+
 </div>
 
 {{end}}
 
 </ul>
 
+<div class="content">
+
+<a
+class="big-button"
+href="/import">
+
+	导入 CSV
+
+</a>
+
+</div>
+
 <div class="footer">
+
 	Password Manager
+
 	<br>
-	Encrypted JSON Vault
+
+	AES-256-GCM Encrypted Vault
+
 </div>
 
 {{else if eq .Page "view"}}
@@ -943,6 +999,7 @@ onclick="location.href='/view?id={{.ID}}'">
 	</div>
 
 	<div class="row">
+
 		<div class="label">
 			名称
 		</div>
@@ -950,6 +1007,7 @@ onclick="location.href='/view?id={{.ID}}'">
 		<div class="value">
 			{{.Item.Title}}
 		</div>
+
 	</div>
 
 	<div class="row">
@@ -965,7 +1023,9 @@ onclick="location.href='/view?id={{.ID}}'">
 			<a
 			href="{{.Item.URL}}"
 			target="_blank">
+
 				{{.Item.URL}}
+
 			</a>
 
 			{{end}}
@@ -999,7 +1059,8 @@ onclick="location.href='/view?id={{.ID}}'">
 			</span>
 
 			<button
-			onclick="togglePassword()"
+			type="button"
+			onclick="togglePassword(this)"
 			style="
 			margin-left:8px;
 			padding:5px 8px;
@@ -1007,7 +1068,9 @@ onclick="location.href='/view?id={{.ID}}'">
 			border:1px solid #888;
 			background:linear-gradient(#fff,#ccc);
 			">
+
 				显示
+
 			</button>
 
 		</div>
@@ -1029,15 +1092,19 @@ onclick="location.href='/view?id={{.ID}}'">
 		<div
 		class="otp-code"
 		id="otp">
+
 			------
+
 		</div>
 
 		<div class="otp-time">
+
 			剩余
 			<span id="seconds">
 				--
 			</span>
 			秒
+
 		</div>
 
 	</div>
@@ -1079,7 +1146,9 @@ onclick="location.href='/view?id={{.ID}}'">
 		<div
 		class="value mono"
 		style="font-size:11px">
+
 			{{.Item.OTPAuth}}
+
 		</div>
 
 	</div>
@@ -1089,9 +1158,11 @@ onclick="location.href='/view?id={{.ID}}'">
 {{end}}
 
 <a
-class="big-button"
+class="big-button blue-button"
 href="/edit?id={{.Item.ID}}">
+
 	编辑
+
 </a>
 
 <form
@@ -1107,7 +1178,9 @@ onsubmit="return confirm('确定删除这个密码吗？');">
 	<button
 	class="big-button red-button"
 	type="submit">
+
 		删除
+
 	</button>
 
 </form>
@@ -1122,25 +1195,26 @@ const realPassword =
 const otpAuth =
 {{json .Item.OTPAuth}};
 
-function togglePassword() {
+function togglePassword(button) {
 
 	const p =
 	document.getElementById("password");
 
-	const button =
-	event.target;
-
 	if (p.innerText === "••••••••") {
 
-		p.innerText = realPassword;
+		p.innerText =
+			realPassword;
 
-		button.innerText = "隐藏";
+		button.innerText =
+			"隐藏";
 
 	} else {
 
-		p.innerText = "••••••••";
+		p.innerText =
+			"••••••••";
 
-		button.innerText = "显示";
+		button.innerText =
+			"显示";
 
 	}
 
@@ -1155,13 +1229,15 @@ async function updateOTP() {
 	try {
 
 		const response =
-		await fetch(
-			"/api/otp?uri=" +
-			encodeURIComponent(otpAuth)
-		);
+			await fetch(
+				"/api/otp?uri=" +
+				encodeURIComponent(
+					otpAuth
+				)
+			);
 
 		const data =
-		await response.json();
+			await response.json();
 
 		if (data.code) {
 
@@ -1172,7 +1248,10 @@ async function updateOTP() {
 
 		}
 
-		if (data.remaining !== undefined) {
+		if (
+			data.remaining !==
+			undefined
+		) {
 
 			document
 			.getElementById("seconds")
@@ -1198,6 +1277,98 @@ setInterval(
 
 </script>
 
+{{else if eq .Page "new"}}
+
+<div class="content">
+
+<form
+method="POST"
+action="/new">
+
+<div class="group">
+
+	<div class="group-title">
+		新建密码
+	</div>
+
+	<div class="form-content">
+
+		<label class="form-label">
+			Title
+		</label>
+
+		<input
+		class="form-input"
+		name="title"
+		placeholder="例如 Google">
+
+		<label class="form-label">
+			URL
+		</label>
+
+		<input
+		class="form-input"
+		name="url"
+		placeholder="https://example.com">
+
+		<label class="form-label">
+			Username
+		</label>
+
+		<input
+		class="form-input"
+		name="username">
+
+		<label class="form-label">
+			Password
+		</label>
+
+		<input
+		class="form-input"
+		name="password"
+		type="text">
+
+		<label class="form-label">
+			Notes
+		</label>
+
+		<textarea
+		class="form-textarea"
+		name="notes"></textarea>
+
+		<label class="form-label">
+			OTPAUTH
+		</label>
+
+		<textarea
+		class="form-textarea"
+		name="otpauth"
+		placeholder="otpauth://totp/..."></textarea>
+
+		<button
+		class="big-button blue-button"
+		type="submit">
+
+			保存
+
+		</button>
+
+	</div>
+
+</div>
+
+</form>
+
+<a
+class="big-button"
+href="/">
+
+	取消
+
+</a>
+
+</div>
+
 {{else if eq .Page "edit"}}
 
 <div class="content">
@@ -1214,69 +1385,71 @@ value="{{.Item.ID}}">
 <div class="group">
 
 	<div class="group-title">
-		账户
+		编辑密码
 	</div>
 
-	<div class="content">
+	<div class="form-content">
 
-	<label class="form-label">
-		Title
-	</label>
+		<label class="form-label">
+			Title
+		</label>
 
-	<input
-	class="form-input"
-	name="title"
-	value="{{.Item.Title}}">
+		<input
+		class="form-input"
+		name="title"
+		value="{{.Item.Title}}">
 
-	<label class="form-label">
-		URL
-	</label>
+		<label class="form-label">
+			URL
+		</label>
 
-	<input
-	class="form-input"
-	name="url"
-	value="{{.Item.URL}}">
+		<input
+		class="form-input"
+		name="url"
+		value="{{.Item.URL}}">
 
-	<label class="form-label">
-		Username
-	</label>
+		<label class="form-label">
+			Username
+		</label>
 
-	<input
-	class="form-input"
-	name="username"
-	value="{{.Item.Username}}">
+		<input
+		class="form-input"
+		name="username"
+		value="{{.Item.Username}}">
 
-	<label class="form-label">
-		Password
-	</label>
+		<label class="form-label">
+			Password
+		</label>
 
-	<input
-	class="form-input"
-	type="text"
-	name="password"
-	value="{{.Item.Password}}">
+		<input
+		class="form-input"
+		name="password"
+		type="text"
+		value="{{.Item.Password}}">
 
-	<label class="form-label">
-		Notes
-	</label>
+		<label class="form-label">
+			Notes
+		</label>
 
-	<textarea
-	class="form-textarea"
-	name="notes">{{.Item.Notes}}</textarea>
+		<textarea
+		class="form-textarea"
+		name="notes">{{.Item.Notes}}</textarea>
 
-	<label class="form-label">
-		OTPAUTH
-	</label>
+		<label class="form-label">
+			OTPAUTH
+		</label>
 
-	<textarea
-	class="form-textarea"
-	name="otpauth">{{.Item.OTPAuth}}</textarea>
+		<textarea
+		class="form-textarea"
+		name="otpauth">{{.Item.OTPAuth}}</textarea>
 
-	<button
-	class="big-button blue-button"
-	type="submit">
-		保存
-	</button>
+		<button
+		class="big-button blue-button"
+		type="submit">
+
+			保存修改
+
+		</button>
 
 	</div>
 
@@ -1287,7 +1460,9 @@ value="{{.Item.ID}}">
 <a
 class="big-button"
 href="/view?id={{.Item.ID}}">
+
 	取消
+
 </a>
 
 </div>
@@ -1302,97 +1477,56 @@ href="/view?id={{.Item.ID}}">
 		导入 CSV
 	</div>
 
-	<div class="import-info">
+	<div class="info">
 
-	你的 CSV 格式：
+		CSV 第一行会自动跳过。
 
-	<br><br>
+		<br><br>
 
-	第一行为空。
+		A = title
+		<br>
+		B = URL
+		<br>
+		C = username
+		<br>
+		D = password
+		<br>
+		E = notes
+		<br>
+		F = OTPAUTH
 
-	<br><br>
+		<br><br>
 
-	A = title
-	<br>
-	B = URL
-	<br>
-	C = username
-	<br>
-	D = password
-	<br>
-	E = notes
-	<br>
-	F = OTPAUTH
+		例如：
 
-	<br><br>
+		<br><br>
 
-	例如：
-
-	<br><br>
-
-	Google,
-	https://google.com,
-	user@example.com,
-	password,
-	我的 Google 账号,
-	otpauth://totp/Google?secret=XXXX
+		Google,https://google.com,user@example.com,password,备注,otpauth://totp/Google?secret=XXXX
 
 	</div>
 
-	<div class="content">
+	<div class="form-content">
 
 	<form
 	method="POST"
 	action="/import"
 	enctype="multipart/form-data">
 
-	<input
-	type="file"
-	name="csv"
-	accept=".csv,text/csv"
-	required>
+		<input
+		type="file"
+		name="csv"
+		accept=".csv,text/csv"
+		required>
 
-	<button
-	class="big-button blue-button"
-	type="submit">
-		导入 CSV
-	</button>
+		<button
+		class="big-button blue-button"
+		type="submit">
+
+			导入 CSV
+
+		</button>
 
 	</form>
-
-	</div>
-
-</div>
-
-<div class="group">
-
-	<div class="group-title">
-		保存方式
-	</div>
-
-	<div class="import-info">
-
-	导入后的密码不会保存成明文 JSON。
-
-	<br><br>
-
-	程序会将整个密码库使用：
-
-	<br>
-
-	AES-256-GCM
-
-	<br>
-
-	+ PBKDF2-SHA256
-
-	<br><br>
-
-	进行加密，然后保存到：
-
-	<br><br>
-
-	<b>passwords.json</b>
 
 	</div>
 
@@ -1401,7 +1535,9 @@ href="/view?id={{.Item.ID}}">
 <a
 class="big-button"
 href="/">
-	返回密码列表
+
+	返回
+
 </a>
 
 </div>
@@ -1417,19 +1553,21 @@ href="/">
 function searchItems() {
 
 	const input =
-	document.getElementById("search");
+		document.getElementById(
+			"search"
+		);
 
 	if (!input) {
 		return;
 	}
 
 	const keyword =
-	input.value.toLowerCase();
+		input.value.toLowerCase();
 
 	const list =
-	document.querySelectorAll(
-		"#passwordList .list-item"
-	);
+		document.querySelectorAll(
+			"#passwordList .list-item"
+		);
 
 	list.forEach(function(item) {
 
@@ -1455,38 +1593,17 @@ function searchItems() {
 </html>
 `
 
-type PageData struct {
-	Page       string
-	Title      string
-	Count      int
-	Items      []PasswordItem
-	Item       PasswordItem
-	Locked     bool
-	LoginTitle string
-	LoginButton string
-	Message    string
-}
-
 func main() {
 
 	initTemplate()
 
-	if fileExists(dataFile) {
-
-		fmt.Println("检测到已有密码库：", dataFile)
-
-	} else {
-
-		fmt.Println("没有找到密码库。")
-
-	}
-
 	http.HandleFunc("/", homeHandler)
 	http.HandleFunc("/unlock", unlockHandler)
-	http.HandleFunc("/import", importHandler)
-	http.HandleFunc("/view", viewHandler)
+	http.HandleFunc("/new", newHandler)
 	http.HandleFunc("/edit", editHandler)
 	http.HandleFunc("/delete", deleteHandler)
+	http.HandleFunc("/view", viewHandler)
+	http.HandleFunc("/import", importHandler)
 	http.HandleFunc("/api/otp", otpHandler)
 
 	fmt.Println()
@@ -1494,14 +1611,21 @@ func main() {
 	fmt.Println(" iOS 3 Password Manager")
 	fmt.Println("======================================")
 	fmt.Println()
-	fmt.Println("地址：")
+	fmt.Println("访问：")
 	fmt.Println("http://localhost:8080")
-	fmt.Println()
-	fmt.Println("局域网访问：")
-	fmt.Println("http://你的电脑IP:8080")
 	fmt.Println()
 	fmt.Println("密码库：")
 	fmt.Println(dataFile)
+	fmt.Println()
+	fmt.Println("CSV:")
+	fmt.Println("A = title")
+	fmt.Println("B = URL")
+	fmt.Println("C = username")
+	fmt.Println("D = password")
+	fmt.Println("E = notes")
+	fmt.Println("F = OTPAUTH")
+	fmt.Println()
+	fmt.Println("第一行会自动跳过。")
 	fmt.Println()
 
 	err := http.ListenAndServe(
@@ -1510,12 +1634,10 @@ func main() {
 	)
 
 	if err != nil {
-
 		fmt.Println(
 			"服务器启动失败:",
 			err,
 		)
-
 	}
 
 }
@@ -1546,25 +1668,6 @@ func initTemplate() {
 
 }
 
-func isUnlocked() bool {
-
-	sessionMu.RLock()
-
-	defer sessionMu.RUnlock()
-
-	return session.Unlocked
-}
-
-func setUnlocked(value bool) {
-
-	sessionMu.Lock()
-
-	session.Unlocked = value
-
-	sessionMu.Unlock()
-
-}
-
 func homeHandler(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -1583,39 +1686,52 @@ func homeHandler(
 
 	if !isUnlocked() {
 
-		renderLogin(
-			w,
-			"请输入主密码",
-			"解锁",
-			"",
-		)
+		if fileExists(dataFile) {
+
+			renderLogin(
+				w,
+				"输入主密码",
+				"解锁",
+				"",
+			)
+
+		} else {
+
+			renderLogin(
+				w,
+				"创建密码库",
+				"创建",
+				"第一次使用，请设置一个主密码。",
+			)
+
+		}
 
 		return
 
 	}
 
-	mu.RLock()
+	itemsMu.RLock()
 
-	dataItems :=
+	list :=
 		make(
 			[]PasswordItem,
 			len(items),
 		)
 
 	copy(
-		dataItems,
+		list,
 		items,
 	)
 
-	mu.RUnlock()
+	itemsMu.RUnlock()
 
 	render(
 		w,
 		PageData{
 			Page:  "home",
 			Title: "密码",
-			Count: len(dataItems),
-			Items: dataItems,
+			Count: len(list),
+			Items: list,
 		},
 	)
 
@@ -1641,13 +1757,13 @@ func unlockHandler(
 	password :=
 		r.FormValue("password")
 
-	if strings.TrimSpace(password) == "" {
+	if password == "" {
 
 		renderLogin(
 			w,
 			"请输入主密码",
 			"解锁",
-			"主密码不能为空",
+			"主密码不能为空。",
 		)
 
 		return
@@ -1656,130 +1772,143 @@ func unlockHandler(
 
 	if !fileExists(dataFile) {
 
+		itemsMu.Lock()
+
+		items =
+			[]PasswordItem{}
+
+		itemsMu.Unlock()
+
+		setMasterPassword(password)
+
 		if err :=
-			saveVault(
-				password,
-			); err != nil {
+			saveVault(); err != nil {
+
+			clearMasterPassword()
 
 			renderLogin(
 				w,
-				"设置主密码",
 				"创建密码库",
-				"创建密码库失败："+err.Error(),
+				"创建",
+				"创建失败："+err.Error(),
 			)
 
 			return
 
 		}
 
-		setUnlocked(true)
-
-		redirectHome(w, r)
+		http.Redirect(w, r, "/", http.StatusSeeOther)
 
 		return
 
 	}
 
-	decrypted, err :=
+	loaded, err :=
 		loadVault(password)
 
 	if err != nil {
 
 		renderLogin(
 			w,
-			"请输入主密码",
+			"输入主密码",
 			"解锁",
-			"主密码错误，或者密码库已损坏。",
+			"主密码错误，或者密码库损坏。",
 		)
 
 		return
 
 	}
 
-	mu.Lock()
+	itemsMu.Lock()
 
-	items = decrypted
+	items = loaded
 
-	mu.Unlock()
+	itemsMu.Unlock()
 
-	setUnlocked(true)
+	setMasterPassword(password)
 
-	redirectHome(w, r)
-
-}
-
-func renderLogin(
-	w http.ResponseWriter,
-	title string,
-	button string,
-	message string,
-) {
-
-	render(
-		w,
-		PageData{
-			Locked:       true,
-			Title:        "密码",
-			LoginTitle:   title,
-			LoginButton:  button,
-			Message:      message,
-		},
-	)
+	http.Redirect(w, r, "/", http.StatusSeeOther)
 
 }
 
-func viewHandler(
+func newHandler(
 	w http.ResponseWriter,
 	r *http.Request,
 ) {
 
 	if !isUnlocked() {
 
-		redirectHome(w, r)
+		http.Redirect(w, r, "/", http.StatusSeeOther)
 
 		return
 
 	}
 
-	id :=
-		r.URL.Query().Get("id")
+	if r.Method == "GET" {
 
-	if id == "" {
-
-		http.NotFound(
+		render(
 			w,
-			r,
+			PageData{
+				Page:  "new",
+				Title: "新建",
+			},
 		)
 
 		return
 
 	}
 
-	mu.RLock()
+	if r.Method != "POST" {
 
-	item, ok :=
-		findItemByID(id)
-
-	mu.RUnlock()
-
-	if !ok {
-
-		http.NotFound(
+		http.Error(
 			w,
-			r,
+			"Method Not Allowed",
+			http.StatusMethodNotAllowed,
 		)
 
 		return
 
 	}
 
-	render(
+	item :=
+		PasswordItem{
+			ID:       newID(),
+			Title:    r.FormValue("title"),
+			URL:      r.FormValue("url"),
+			Username: r.FormValue("username"),
+			Password: r.FormValue("password"),
+			Notes:    r.FormValue("notes"),
+			OTPAuth:  r.FormValue("otpauth"),
+		}
+
+	itemsMu.Lock()
+
+	items =
+		append(
+			items,
+			item,
+		)
+
+	itemsMu.Unlock()
+
+	if err :=
+		saveVault(); err != nil {
+
+		http.Error(
+			w,
+			"保存失败："+err.Error(),
+			http.StatusInternalServerError,
+		)
+
+		return
+
+	}
+
+	http.Redirect(
 		w,
-		PageData{
-			Page:  "view",
-			Title: item.Title,
-			Item:  item,
-		},
+		r,
+		"/view?id="+url.QueryEscape(item.ID),
+		http.StatusSeeOther,
 	)
 
 }
@@ -1791,7 +1920,7 @@ func editHandler(
 
 	if !isUnlocked() {
 
-		redirectHome(w, r)
+		http.Redirect(w, r, "/", http.StatusSeeOther)
 
 		return
 
@@ -1802,12 +1931,12 @@ func editHandler(
 		id :=
 			r.URL.Query().Get("id")
 
-		mu.RLock()
+		itemsMu.RLock()
 
 		item, ok :=
 			findItemByID(id)
 
-		mu.RUnlock()
+		itemsMu.RUnlock()
 
 		if !ok {
 
@@ -1859,7 +1988,7 @@ func editHandler(
 			OTPAuth:  r.FormValue("otpauth"),
 		}
 
-	mu.Lock()
+	itemsMu.Lock()
 
 	found := false
 
@@ -1877,7 +2006,7 @@ func editHandler(
 
 	}
 
-	mu.Unlock()
+	itemsMu.Unlock()
 
 	if !found {
 
@@ -1891,7 +2020,7 @@ func editHandler(
 	}
 
 	if err :=
-		saveCurrentVault(); err != nil {
+		saveVault(); err != nil {
 
 		http.Error(
 			w,
@@ -1919,7 +2048,7 @@ func deleteHandler(
 
 	if !isUnlocked() {
 
-		redirectHome(w, r)
+		http.Redirect(w, r, "/", http.StatusSeeOther)
 
 		return
 
@@ -1940,7 +2069,7 @@ func deleteHandler(
 	id :=
 		r.FormValue("id")
 
-	mu.Lock()
+	itemsMu.Lock()
 
 	newItems :=
 		make(
@@ -1951,7 +2080,8 @@ func deleteHandler(
 
 	found := false
 
-	for _, item := range items {
+	for _, item :=
+		range items {
 
 		if item.ID == id {
 
@@ -1971,7 +2101,7 @@ func deleteHandler(
 
 	items = newItems
 
-	mu.Unlock()
+	itemsMu.Unlock()
 
 	if !found {
 
@@ -1985,7 +2115,7 @@ func deleteHandler(
 	}
 
 	if err :=
-		saveCurrentVault(); err != nil {
+		saveVault(); err != nil {
 
 		http.Error(
 			w,
@@ -1997,7 +2127,52 @@ func deleteHandler(
 
 	}
 
-	redirectHome(w, r)
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+
+}
+
+func viewHandler(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+
+	if !isUnlocked() {
+
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+
+		return
+
+	}
+
+	id :=
+		r.URL.Query().Get("id")
+
+	itemsMu.RLock()
+
+	item, ok :=
+		findItemByID(id)
+
+	itemsMu.RUnlock()
+
+	if !ok {
+
+		http.NotFound(
+			w,
+			r,
+		)
+
+		return
+
+	}
+
+	render(
+		w,
+		PageData{
+			Page:  "view",
+			Title: item.Title,
+			Item:  item,
+		},
+	)
 
 }
 
@@ -2008,7 +2183,7 @@ func importHandler(
 
 	if !isUnlocked() {
 
-		redirectHome(w, r)
+		http.Redirect(w, r, "/", http.StatusSeeOther)
 
 		return
 
@@ -2042,14 +2217,14 @@ func importHandler(
 
 	err :=
 		r.ParseMultipartForm(
-			32 << 20,
+			64 << 20,
 		)
 
 	if err != nil {
 
 		http.Error(
 			w,
-			"无法读取上传文件",
+			"无法读取上传文件："+err.Error(),
 			http.StatusBadRequest,
 		)
 
@@ -2064,7 +2239,7 @@ func importHandler(
 
 		http.Error(
 			w,
-			"没有选择 CSV 文件",
+			"没有选择 CSV 文件。",
 			http.StatusBadRequest,
 		)
 
@@ -2089,18 +2264,18 @@ func importHandler(
 
 	}
 
-	mu.Lock()
+	itemsMu.Lock()
 
 	items = newItems
 
-	mu.Unlock()
+	itemsMu.Unlock()
 
 	if err :=
-		saveCurrentVault(); err != nil {
+		saveVault(); err != nil {
 
 		http.Error(
 			w,
-			"密码库保存失败："+err.Error(),
+			"保存密码库失败："+err.Error(),
 			http.StatusInternalServerError,
 		)
 
@@ -2108,12 +2283,7 @@ func importHandler(
 
 	}
 
-	http.Redirect(
-		w,
-		r,
-		"/",
-		http.StatusSeeOther,
-	)
+	http.Redirect(w, r, "/", http.StatusSeeOther)
 
 }
 
@@ -2122,9 +2292,7 @@ func parseCSV(
 ) ([]PasswordItem, error) {
 
 	cr :=
-		csv.NewReader(
-			reader,
-		)
+		csv.NewReader(reader)
 
 	cr.FieldsPerRecord = -1
 
@@ -2148,16 +2316,7 @@ func parseCSV(
 		row++
 
 		/*
-			严格按照你的 CSV 要求：
-
-			第一行不读取。
-
-			A title
-			B URL
-			C username
-			D password
-			E notes
-			F OTPAUTH
+			严格跳过 CSV 第一行。
 		*/
 
 		if row == 1 {
@@ -2188,34 +2347,52 @@ func parseCSV(
 				ID: newID(),
 			}
 
+		/*
+			A = title
+		*/
+
 		if len(record) > 0 {
-			item.Title =
-				record[0]
+			item.Title = record[0]
 		}
+
+		/*
+			B = URL
+		*/
 
 		if len(record) > 1 {
-			item.URL =
-				record[1]
+			item.URL = record[1]
 		}
+
+		/*
+			C = username
+		*/
 
 		if len(record) > 2 {
-			item.Username =
-				record[2]
+			item.Username = record[2]
 		}
+
+		/*
+			D = password
+		*/
 
 		if len(record) > 3 {
-			item.Password =
-				record[3]
+			item.Password = record[3]
 		}
+
+		/*
+			E = notes
+		*/
 
 		if len(record) > 4 {
-			item.Notes =
-				record[4]
+			item.Notes = record[4]
 		}
 
+		/*
+			F = OTPAUTH
+		*/
+
 		if len(record) > 5 {
-			item.OTPAuth =
-				record[5]
+			item.OTPAuth = record[5]
 		}
 
 		result =
@@ -2223,6 +2400,7 @@ func parseCSV(
 				result,
 				item,
 			)
+
 	}
 
 	return result, nil
@@ -2252,9 +2430,7 @@ func otpHandler(
 	code,
 	remaining,
 	err :=
-		generateTOTP(
-			authURI,
-		)
+		generateTOTP(authURI)
 
 	w.Header().Set(
 		"Content-Type",
@@ -2300,7 +2476,7 @@ func generateTOTP(
 		return "",
 			0,
 			errors.New(
-				"不是有效的 otpauth URI",
+				"不是有效的 OTPAUTH",
 			)
 
 	}
@@ -2348,11 +2524,6 @@ func generateTOTP(
 
 	if err != nil {
 
-		/*
-			有些 OTP 导出工具会产生
-			带 = 的 Base32。
-		*/
-
 		decoded, err =
 			base32.StdEncoding.DecodeString(
 				secret,
@@ -2363,7 +2534,7 @@ func generateTOTP(
 			return "",
 				0,
 				fmt.Errorf(
-					"无法解析 Base32 secret: %v",
+					"无法解析 OTP secret: %v",
 					err,
 				)
 
@@ -2384,7 +2555,7 @@ func generateTOTP(
 
 		return "",
 			0,
-			fmt.Errorf(
+			errors.New(
 				"目前只支持 SHA1 OTP",
 			)
 
@@ -2449,7 +2620,8 @@ func generateTOTP(
 			decoded,
 		)
 
-	mac.Write(message)
+	_, _ =
+		mac.Write(message)
 
 	hash :=
 		mac.Sum(nil)
@@ -2470,14 +2642,14 @@ func generateTOTP(
 		mod = 100000000
 	}
 
-	code :=
+	otp :=
 		binCode % mod
 
-	result :=
+	code :=
 		fmt.Sprintf(
 			"%0*d",
 			digits,
-			code,
+			otp,
 		)
 
 	remaining :=
@@ -2486,88 +2658,37 @@ func generateTOTP(
 				(now % period),
 		)
 
-	return result,
+	return code,
 		remaining,
 		nil
 
 }
 
-func saveCurrentVault() error {
+func saveVault() error {
 
-	password,
-	available :=
-		getSessionPassword()
+	passwordMu.RLock()
 
-	if !available {
+	password :=
+		masterPassword
+
+	passwordMu.RUnlock()
+
+	if password == "" {
 
 		return errors.New(
-			"当前会话没有主密码",
+			"密码库尚未解锁",
 		)
 
 	}
 
-	return saveVault(password)
-
-}
-
-/*
-	为了避免在 session 里长期直接保存主密码，
-	这里保存派生后的密钥。
-
-	程序运行期间主密钥存在内存中；
-	退出程序后自然消失。
-*/
-
-var (
-	keyMu sync.RWMutex
-
-	masterKey []byte
-)
-
-func getSessionPassword() (
-	string,
-	bool,
-) {
-
-	keyMu.RLock()
-
-	defer keyMu.RUnlock()
-
-	if len(masterKey) == 0 {
-		return "", false
-	}
-
-	return string(masterKey), true
-
-}
-
-func setSessionPassword(
-	password string,
-) {
-
-	keyMu.Lock()
-
-	masterKey =
-		[]byte(password)
-
-	keyMu.Unlock()
-
-}
-
-func saveVault(
-	password string,
-) error {
-
-	mu.RLock()
+	itemsMu.RLock()
 
 	data, err :=
-		json.MarshalIndent(
+		json.Marshal(
 			items,
-			"",
-			"  ",
 		)
 
-	mu.RUnlock()
+	itemsMu.RUnlock()
 
 	if err != nil {
 		return err
@@ -2634,7 +2755,7 @@ func saveVault(
 			KDF:        "PBKDF2-SHA256",
 			Iterations: pbkdf2Iterations,
 			Salt:       hex.EncodeToString(salt),
-			Nonce:      hex.EncodeToString(nonce),
+			Nonce:       hex.EncodeToString(nonce),
 			Data:       base64.StdEncoding.EncodeToString(encrypted),
 		}
 
@@ -2674,8 +2795,6 @@ func saveVault(
 		return err
 	}
 
-	setSessionPassword(password)
-
 	return nil
 
 }
@@ -2702,14 +2821,13 @@ func loadVault(
 		); err != nil {
 
 		return nil, err
-
 	}
 
 	if vault.KDF != "PBKDF2-SHA256" {
 
 		return nil,
 			errors.New(
-				"不支持的 KDF",
+				"不支持的密码库格式",
 			)
 
 	}
@@ -2782,7 +2900,7 @@ func loadVault(
 
 		return nil,
 			errors.New(
-				"密码错误或数据损坏",
+				"主密码错误或密码库损坏",
 			)
 
 	}
@@ -2798,8 +2916,6 @@ func loadVault(
 		return nil, err
 	}
 
-	setSessionPassword(password)
-
 	return result, nil
 
 }
@@ -2811,20 +2927,20 @@ func pbkdf2SHA256(
 	keyLen int,
 ) []byte {
 
-	hLen := 32
+	const hashSize = 32
 
-	blocks :=
-		(keyLen + hLen - 1) /
-			hLen
+	blockCount :=
+		(keyLen + hashSize - 1) /
+			hashSize
 
 	output :=
 		make(
 			[]byte,
 			0,
-			blocks*hLen,
+			blockCount*hashSize,
 		)
 
-	for block := 1; block <= blocks; block++ {
+	for block := 1; block <= blockCount; block++ {
 
 		mac :=
 			hmac.New(
@@ -2832,23 +2948,19 @@ func pbkdf2SHA256(
 				password,
 			)
 
-		mac.Write(salt)
+		_, _ =
+			mac.Write(salt)
 
-		var counter [4]byte
+		counter :=
+			[]byte{
+				byte(block >> 24),
+				byte(block >> 16),
+				byte(block >> 8),
+				byte(block),
+			}
 
-		counter[0] =
-			byte(block >> 24)
-
-		counter[1] =
-			byte(block >> 16)
-
-		counter[2] =
-			byte(block >> 8)
-
-		counter[3] =
-			byte(block)
-
-		mac.Write(counter[:])
+		_, _ =
+			mac.Write(counter)
 
 		u :=
 			mac.Sum(nil)
@@ -2869,7 +2981,8 @@ func pbkdf2SHA256(
 					password,
 				)
 
-			mac.Write(u)
+			_, _ =
+				mac.Write(u)
 
 			u =
 				mac.Sum(nil)
@@ -2913,10 +3026,11 @@ func findItemByID(
 
 func newID() string {
 
-	b := make([]byte, 16)
+	buffer :=
+		make([]byte, 16)
 
 	if _, err :=
-		rand.Read(b); err != nil {
+		rand.Read(buffer); err != nil {
 
 		return fmt.Sprintf(
 			"%d",
@@ -2925,31 +3039,61 @@ func newID() string {
 
 	}
 
-	return hex.EncodeToString(b)
+	return hex.EncodeToString(
+		buffer,
+	)
 
 }
 
-func fileExists(
-	name string,
-) bool {
-
-	_, err :=
-		os.Stat(name)
-
-	return err == nil
-
-}
-
-func redirectHome(
-	w http.ResponseWriter,
-	r *http.Request,
+func setMasterPassword(
+	password string,
 ) {
 
-	http.Redirect(
+	passwordMu.Lock()
+
+	masterPassword =
+		password
+
+	passwordMu.Unlock()
+
+}
+
+func clearMasterPassword() {
+
+	passwordMu.Lock()
+
+	masterPassword = ""
+
+	passwordMu.Unlock()
+
+}
+
+func isUnlocked() bool {
+
+	passwordMu.RLock()
+
+	defer passwordMu.RUnlock()
+
+	return masterPassword != ""
+
+}
+
+func renderLogin(
+	w http.ResponseWriter,
+	title string,
+	button string,
+	message string,
+) {
+
+	render(
 		w,
-		r,
-		"/",
-		http.StatusSeeOther,
+		PageData{
+			Locked:      true,
+			Title:       "密码",
+			LoginTitle:  title,
+			LoginButton: button,
+			Message:     message,
+		},
 	)
 
 }
@@ -2980,14 +3124,13 @@ func render(
 
 }
 
-/*
-	防止编译器认为 bufio 未使用。
-	同时这里提供一个简单的命令行提示，
-	方便 Windows 双击运行时看到说明。
-*/
+func fileExists(
+	name string,
+) bool {
 
-func init() {
+	_, err :=
+		os.Stat(name)
 
-	_ = bufio.NewReader
+	return err == nil
 
 }
