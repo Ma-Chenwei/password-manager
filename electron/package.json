@@ -1,0 +1,36 @@
+{
+  "name": "password-manager",
+  "version": "1.0.0",
+  "description": "Local Password Manager",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder --win"
+  },
+  "devDependencies": {
+    "electron": "^38.0.0",
+    "electron-builder": "^26.0.0"
+  },
+  "build": {
+    "appId": "com.machenwei.passwordmanager",
+    "productName": "Password Manager",
+    "asar": true,
+    "asarUnpack": [
+      "backend.exe"
+    ],
+    "files": [
+      "main.js",
+      "preload.js",
+      "backend.exe",
+      "package.json"
+    ],
+    "win": {
+      "target": "nsis",
+      "executableName": "PasswordManager"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}
